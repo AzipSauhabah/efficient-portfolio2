@@ -101,7 +101,7 @@ This project is open source and available under the MIT License.
 
 ## 👤 Author
 
-YOUR NAME
-GitHub: https://github.com/YOUR-USERNAME
+Azip Sauhabah
+GitHub: https://github.com/AzipSauhabah
 
 ---
