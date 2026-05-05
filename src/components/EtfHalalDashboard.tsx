@@ -173,7 +173,7 @@ export default function App() {
                 Analyse Quantitative — ETFs Islamiques
               </h1>
               <p style={{ color: '#64748B', fontSize: '0.82rem', margin: 0 }}>
-                Backtesting DCA · Métriques Ploovers-style · Warren Buffett × Renaissance Technologies · Jan 2019 → Avr 2025
+                Backtesting DCA · Métriques AS · Jan 2019 → Avr 2025
               </p>
             </div>
           </div>
@@ -238,7 +238,7 @@ export default function App() {
             {/* Quick comparison table */}
             <div style={{ background: '#0F172A', border: '1px solid #1E293B', borderRadius: 12, overflow: 'hidden', marginBottom: 24 }}>
               <div style={{ padding: '14px 20px', borderBottom: '1px solid #1E293B', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontWeight: 700, fontSize: '0.9rem', color: '#F1F5F9' }}>Tableau Comparatif Complet (style Ploovers)</span>
+                <span style={{ fontWeight: 700, fontSize: '0.9rem', color: '#F1F5F9' }}>Tableau Comparatif Complet (style AS)</span>
                 <span style={{ fontSize: '0.72rem', color: '#475569' }}>Base: MSCI World Islamic vs Benchmark</span>
               </div>
               <div style={{ overflowX: 'auto' }}>
@@ -289,7 +289,7 @@ export default function App() {
               {[
                 { icon: '🏆', title: 'Meilleur Sharpe halal', text: 'ISWD (1.15) surperforme significativement les autres ETFs islamiques. Comparable au MSCI World conventionnel (1.22). La sélection charia exclut les banques (très endetées) ce qui améliore naturellement le ratio.', color: '#1E3A5F' },
                 { icon: '⚠️', title: 'EM Islamic : Sous-performance', text: 'ISDE et HIWS (Marchés Émergents) affichent des CAGR négatifs sur 5 ans et des Max Drawdown catastrophiques (-64% pour ISDE). La combinaison exposition EM + filtres Islam crée une double pénalité sectorielle.', color: '#3B1A1A' },
-                { icon: '💡', title: 'Insight Renaissance Tech', text: 'La philosophie Medallion Fund : privilégier le ratio rendement/risque sur la performance brute. ISWD avec Sharpe 1.15 bat beaucoup de fonds actifs sur ce critère — bien supérieur au Sharpe ~0.9 de Buffett sur 30 ans.', color: '#1A2A1A' },
+                { icon: '💡', title: 'Insight AS Tech', text: 'La philosophie Medallion Fund : privilégier le ratio rendement/risque sur la performance brute. ISWD avec Sharpe 1.15 bat beaucoup de fonds actifs sur ce critère — bien supérieur au Sharpe ~0.9 de Buffett sur 30 ans.', color: '#1A2A1A' },
               ].map(box => (
                 <div key={box.title} style={{ background: box.color, border: `1px solid ${box.color === '#1E3A5F' ? '#2D4A6F' : box.color === '#3B1A1A' ? '#5A2525' : '#2A3A2A'}`, borderRadius: 10, padding: 16 }}>
                   <div style={{ fontSize: '1.3rem', marginBottom: 6 }}>{box.icon}</div>
@@ -347,7 +347,7 @@ export default function App() {
 
             {/* Rolling CAGR distribution */}
             <div style={{ background: '#0F172A', border: '1px solid #1E293B', borderRadius: 12, padding: 20 }}>
-              <h3 style={{ color: '#F1F5F9', fontSize: '0.9rem', fontWeight: 700, marginBottom: 16 }}>Distribution CAGR Glissant 3 ans (style Ploovers)</h3>
+              <h3 style={{ color: '#F1F5F9', fontSize: '0.9rem', fontWeight: 700, marginBottom: 16 }}>Distribution CAGR Glissant 3 ans (style AS)</h3>
               {(() => {
                 const data = [
                   { name: 'ISWD', mean: 21.8, min: 7.9, max: 32.9, pct_pos: 100, color: '#3B82F6' },
@@ -460,7 +460,7 @@ export default function App() {
               <h3 style={{ color: '#F1F5F9', fontSize: '0.9rem', fontWeight: 700, marginBottom: 4 }}>
                 DCA {dcaAmount}€/mois sur {dcaETF} — {dcaStart} → Avr 2025
               </h3>
-              <p style={{ color: '#475569', fontSize: '0.75rem', marginBottom: 14 }}>Stratégie Warren Buffett adaptée : investissement régulier, sans market timing</p>
+              <p style={{ color: '#475569', fontSize: '0.75rem', marginBottom: 14 }}>Stratégie ASt adaptée : investissement régulier, sans market timing</p>
               <ResponsiveContainer width="100%" height={300}>
                 <AreaChart data={dcaData} margin={{ top: 5, right: 20, bottom: 5, left: 10 }}>
                   <defs>
@@ -602,7 +602,7 @@ export default function App() {
 
             {/* Tail risk box */}
             <div style={{ background: '#1A0E0E', border: '1px solid #5A1E1E', borderRadius: 12, padding: 20 }}>
-              <h3 style={{ color: '#FCA5A5', fontSize: '0.9rem', fontWeight: 700, marginBottom: 12 }}>⚠️ Risques de Queue (Tail Risks) — Analyse Renaissance Tech Style</h3>
+              <h3 style={{ color: '#FCA5A5', fontSize: '0.9rem', fontWeight: 700, marginBottom: 12 }}>⚠️ Risques de Queue (Tail Risks) — Analyse AS Tech Style</h3>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: 12 }}>
                 {[
                   { title: 'Risque de concentration EM', etf: 'ISDE / HIWS', text: 'Les filtres islamiques sur les émergents créent un portefeuille très concentré sur quelques pays (Chine exclue → sur-exposition Arabie/EAU). Corrélation avec risque géopolitique régional.', level: 'ÉLEVÉ' },
@@ -786,7 +786,7 @@ export default function App() {
                 <div>
                   <h2 style={{ color: '#86EFAC', fontSize: '1.2rem', fontWeight: 800, margin: '0 0 8px' }}>Verdict : OUI, vous pouvez investir — mais avec discernement</h2>
                   <p style={{ color: '#94A3B8', fontSize: '0.85rem', lineHeight: 1.6, margin: '0 0 12px' }}>
-                    Les 5 ETFs sont <strong style={{ color: '#86EFAC' }}>100% halal certifiés</strong> par des Shariah Boards reconnus. L'analyse quantitative sur 5+ ans révèle cependant des disparités majeures de performance. Voici le classement basé sur les mêmes critères que Ploovers pour le S&P500.
+                    Les 5 ETFs sont <strong style={{ color: '#86EFAC' }}>100% halal certifiés</strong> par des Shariah Boards reconnus. L'analyse quantitative sur 5+ ans révèle cependant des disparités majeures de performance. Voici le classement basé sur les mêmes critères que AS pour le S&P500.
                   </p>
                 </div>
               </div>
@@ -899,7 +899,7 @@ export default function App() {
 
             {/* Portfolio recommendation */}
             <div style={{ background: '#0A111C', border: '1px solid #1E293B', borderRadius: 14, padding: 24, marginBottom: 20 }}>
-              <h3 style={{ color: '#F1F5F9', fontSize: '1rem', fontWeight: 700, marginBottom: 16 }}>📐 Allocation Optimale Recommandée — Style Buffett × Renaissance</h3>
+              <h3 style={{ color: '#F1F5F9', fontSize: '1rem', fontWeight: 700, marginBottom: 16 }}>📐 Allocation Optimale Recommandée — Style Buffett × AS</h3>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12, marginBottom: 16 }}>
                 {[
                   { label: 'ISWD', pct: 65, desc: 'Cœur diversifié mondial', color: '#3B82F6' },
