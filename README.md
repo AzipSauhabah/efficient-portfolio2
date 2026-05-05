@@ -1,107 +1,147 @@
-# 🚀 Efficient Portfolio
+# 📊 Efficient Portfolio 2
 
-A modern and responsive portfolio built with React and Vite, designed to showcase projects, skills, and experience with a clean UI and fast performance.
+A modern fullstack financial web application for portfolio optimization, built with a serverless FastAPI backend and a React + TypeScript frontend.
+
+It allows users to manage multiple portfolios, optimize asset allocation using Modern Portfolio Theory (Markowitz), visualize the efficient frontier, and export results as PDF reports.
 
 ---
 
 ## ✨ Features
 
-* ⚡ Built with Vite for lightning-fast performance
-* ⚛️ React-based component architecture
-* 🎨 Clean and responsive UI
-* 📱 Mobile-friendly design
-* 🔧 Easy to customize
+- Portfolio optimization (risk / return trade-off)
+- Efficient frontier visualization
+- Multi-portfolio management
+- Real-time market data via yfinance
+- Fast React + Vite frontend
+- PDF export of portfolio analysis
+- Serverless backend deployed on Vercel
+
+---
+
+## 🏗️ Architecture
+
+efficient-portfolio2/
+│
+├── api/
+│   └── index.py              # FastAPI backend (serverless)
+│
+├── src/
+│   ├── App.tsx              # Main dashboard
+│   ├── main.tsx
+│   ├── hooks/
+│   │   └── useApi.ts        # API calls
+│   ├── types/
+│   │   └── index.ts         # TypeScript types
+│   └── utils/
+│       └── pdfExport.ts     # PDF export logic
+│
+├── index.html
+├── package.json
+├── vite.config.ts
+├── vercel.json
+├── requirements.txt
+└── README.md
 
 ---
 
 ## 🛠️ Tech Stack
 
-* React
-* Vite
-* JavaScript / TypeScript
-* CSS
+Backend:
+- FastAPI (Python)
+- yfinance
+- NumPy / Pandas
+- Markowitz optimization
+
+Frontend:
+- React
+- TypeScript
+- Vite
+- Custom hooks
+- PDF export utility
+
+Deployment:
+- Vercel (serverless backend + frontend)
 
 ---
 
-## 📦 Installation
+## 🚀 Installation
 
-Clone the repository:
+Clone repository:
 
-```bash
-git clone https://github.com/YOUR-USERNAME/efficient-portfolio.git
-cd efficient-portfolio
-```
+git clone https://github.com/AzipSauhabah/efficient-portfolio2.git
+cd efficient-portfolio2
 
-Install dependencies:
+---
 
-```bash
+Backend setup:
+
+python -m venv venv
+source venv/bin/activate
+venv\Scripts\activate
+
+pip install -r requirements.txt
+
+uvicorn api.index:app --reload
+
+---
+
+Frontend setup:
+
 npm install
-```
-
-Run the development server:
-
-```bash
 npm run dev
-```
 
 ---
 
-## 🌐 Live Demo
+## 📡 API Endpoints
 
-👉 https://your-project.vercel.app
-
----
-
-## 📁 Project Structure
-
-```
-efficient-portfolio/
-├── public/
-├── src/
-│   ├── components/
-│   ├── assets/
-│   ├── App.jsx
-│   └── main.jsx
-├── index.html
-├── package.json
-└── tsconfig.json
-```
+GET /           → Health check  
+POST /optimize  → Portfolio optimization  
+POST /prices    → Market data  
+POST /portfolio → Portfolio management  
 
 ---
 
-## 🚀 Deployment
+## 📄 PDF Export
 
-This project can be easily deployed using platforms like Vercel:
+File:
+src/utils/pdfExport.ts
 
-1. Push your project to GitHub
-2. Import the repository into Vercel
-3. Deploy in one click
-
----
-
-## ✏️ Customization
-
-* Update content in `src/App.jsx`
-* Add your own components in `src/components/`
-* Modify styles as needed
+Generates:
+- allocation summary
+- performance metrics
+- report export
 
 ---
 
-## 🤝 Contributing
+## 🌐 Deployment
 
-Contributions are welcome! Feel free to open issues or submit pull requests.
+Configured with Vercel:
+
+vercel.json
+
+Supports:
+- FastAPI serverless functions
+- Static Vite frontend
 
 ---
 
-## 📄 License
+## 📌 Roadmap
 
-This project is open source and available under the MIT License.
+- Authentication system
+- Database persistence
+- Advanced charts
+- Backtesting engine
+- Trading simulation
 
 ---
 
 ## 👤 Author
 
-Azip Sauhabah
+Azip Sauhabah  
 GitHub: https://github.com/AzipSauhabah
 
 ---
+
+## 📄 License
+
+GNU License.
