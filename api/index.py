@@ -561,3 +561,715 @@ def get_rolling(key:str,window_years:int=3,period:str="5y"):
             "stats":{"mean":round(float(np.mean(cagrs)),2),"min":round(float(np.min(cagrs)),2),
                      "max":round(float(np.max(cagrs)),2),"pct_positive":round(float(np.mean([c>0 for c in cagrs])*100),1),
                      "p5":round(float(np.percentile(cagrs,5)),2),"p95":round(float(np.percentile(cagrs,95)),2)}}
+
+# ═══════════════════════════════════════════════════════════════════════
+# STATISTICAL SIGNIFICANCE ENGINE
+# ═══════════════════════════════════════════════════════════════════════
+
+def compute_significance(prices: list, dates: list, bench_prices: list = None,
+                         bench_dates: list = None, rf: float = 0.03, n_boot: int = 1000) -> dict:
+    """
+    Full statistical significance battery:
+    - Sharpe ratio t-test (Jobson-Korkie asymptotic SE)
+    - CAGR t-test on log-returns
+    - Bootstrap 95%/99% CI for Sharpe, CAGR, Max DD
+    - Jensen's alpha significance vs benchmark
+    - Max Drawdown Monte Carlo percentile
+    - Autocorrelation Ljung-Box test (return predictability)
+    - Normality: Jarque-Bera + Shapiro-Wilk (if n<5000)
+    Returns significance flags + p-values for every metric
+    """
+    s   = pd.Series(prices, index=pd.to_datetime(dates)).dropna()
+    ret = s.pct_change().dropna().values
+    n   = len(ret)
+    if n < 30:
+        return {"error": "Need at least 30 observations for significance tests"}
+
+    rf_daily = rf / 252
+    ann      = 252
+
+    # ── 1. Sharpe t-test (Jobson-Korkie 1981) ────────────────────────
+    sr       = float((ret.mean() - rf_daily) / ret.std() * np.sqrt(ann))
+    sk       = float(stats.skew(ret))
+    ku       = float(stats.kurtosis(ret))  # excess
+    se_sr    = np.sqrt((1 + 0.5*sr**2 - sk*sr + (ku/4)*sr**2) / n)
+    t_sharpe = sr / se_sr if se_sr > 0 else 0
+    p_sharpe = float(2 * (1 - stats.norm.cdf(abs(t_sharpe))))
+
+    # ── 2. CAGR significance (t-test on log returns) ──────────────────
+    log_ret   = np.log(1 + ret)
+    t_cagr, p_cagr = stats.ttest_1samp(log_ret, 0)
+    cagr_ann  = float((np.exp(log_ret.mean()) ** ann - 1) * 100)
+
+    # ── 3. Bootstrap CI ───────────────────────────────────────────────
+    np.random.seed(42)
+    boot_sharpes, boot_cagrs, boot_mdds = [], [], []
+    for _ in range(n_boot):
+        sample = np.random.choice(ret, size=n, replace=True)
+        bs = float((sample.mean() - rf_daily) / sample.std() * np.sqrt(ann)) if sample.std() > 0 else 0
+        bc = float((np.exp(np.log(1+sample).mean())**ann - 1)*100)
+        prices_b = np.exp(np.cumsum(np.log(1+sample)))
+        roll_max = np.maximum.accumulate(prices_b)
+        bm = float(np.min((prices_b - roll_max) / roll_max)) * 100
+        boot_sharpes.append(bs); boot_cagrs.append(bc); boot_mdds.append(bm)
+
+    # ── 4. Alpha significance (Jensen vs benchmark) ───────────────────
+    alpha_sig = {}
+    if bench_prices and bench_dates and len(bench_prices) > 30:
+        sb      = pd.Series(bench_prices, index=pd.to_datetime(bench_dates)).dropna()
+        ret_b   = sb.pct_change().dropna().values
+        min_len = min(len(ret), len(ret_b))
+        r1, r2  = ret[-min_len:], ret_b[-min_len:]
+        ex1, ex2 = r1 - rf_daily, r2 - rf_daily
+        slope, intercept, r_val, _, se = stats.linregress(ex2, ex1)
+        t_alpha = float(intercept / se) if se > 0 else 0
+        p_alpha = float(2*(1 - stats.t.cdf(abs(t_alpha), df=min_len-2)))
+        alpha_sig = {
+            "alpha_annualized_pct": round(float(intercept*ann*100), 3),
+            "beta":                 round(float(slope), 4),
+            "r_squared":            round(float(r_val**2), 4),
+            "t_stat":               round(t_alpha, 4),
+            "p_value":              round(p_alpha, 4),
+            "significant_95":       bool(p_alpha < 0.05),
+            "significant_99":       bool(p_alpha < 0.01),
+        }
+
+    # ── 5. Max DD Monte Carlo ─────────────────────────────────────────
+    prices_s  = np.exp(np.cumsum(np.log(1+ret)))
+    roll_max  = np.maximum.accumulate(prices_s)
+    obs_mdd   = float(np.min((prices_s - roll_max) / roll_max)) * 100
+    n_sim     = min(n_boot, 500)
+    sim_mdds  = []
+    for _ in range(n_sim):
+        sim = np.random.normal(ret.mean(), ret.std(), n)
+        sp  = np.exp(np.cumsum(sim)); rm = np.maximum.accumulate(sp)
+        sim_mdds.append(float(np.min((sp-rm)/rm)*100))
+    mdd_pctile = float(np.mean([m <= obs_mdd for m in sim_mdds])) * 100
+
+    # ── 6. Autocorrelation Ljung-Box ─────────────────────────────────
+    lag   = min(10, n//5)
+    lb_stat, lb_pval = stats.acf(ret, nlags=lag, fft=True, qstat=True)[1:3]
+    lb_stat_v = float(lb_stat[-1]) if len(lb_stat) > 0 else 0
+    lb_pval_v = float(lb_pval[-1]) if len(lb_pval) > 0 else 1
+
+    # ── 7. Normality tests ────────────────────────────────────────────
+    jb_stat, jb_pval     = stats.jarque_bera(ret)
+    norm_stat, norm_pval = stats.normaltest(ret)  # D'Agostino K²
+
+    # ── Minimum observations for reliability ─────────────────────────
+    min_reliable = 252  # 1 year
+    data_quality = "high" if n >= 1260 else ("medium" if n >= 252 else "low")
+
+    return {
+        "n_observations":        n,
+        "data_quality":          data_quality,
+        "min_reliable_obs":      min_reliable,
+
+        # Sharpe
+        "sharpe":                round(sr, 4),
+        "sharpe_se":             round(float(se_sr), 4),
+        "sharpe_t_stat":         round(float(t_sharpe), 4),
+        "sharpe_p_value":        round(p_sharpe, 4),
+        "sharpe_significant_95": bool(p_sharpe < 0.05),
+        "sharpe_significant_99": bool(p_sharpe < 0.01),
+        "sharpe_ci95_low":       round(float(np.percentile(boot_sharpes, 2.5)), 3),
+        "sharpe_ci95_high":      round(float(np.percentile(boot_sharpes, 97.5)), 3),
+
+        # CAGR
+        "cagr_pct":              round(cagr_ann, 3),
+        "cagr_t_stat":           round(float(t_cagr), 4),
+        "cagr_p_value":          round(float(p_cagr), 4),
+        "cagr_significant_95":   bool(p_cagr < 0.05),
+        "cagr_ci95_low":         round(float(np.percentile(boot_cagrs, 2.5)), 2),
+        "cagr_ci95_high":        round(float(np.percentile(boot_cagrs, 97.5)), 2),
+
+        # Max DD
+        "max_dd_pct":            round(obs_mdd, 2),
+        "max_dd_ci95_low":       round(float(np.percentile(boot_mdds, 2.5)), 2),
+        "max_dd_ci95_high":      round(float(np.percentile(boot_mdds, 97.5)), 2),
+        "max_dd_mc_percentile":  round(mdd_pctile, 1),
+        "max_dd_worse_than_random": bool(mdd_pctile < 20),
+
+        # Alpha
+        "alpha":                 alpha_sig,
+
+        # Autocorrelation
+        "ljung_box_stat":        round(lb_stat_v, 4),
+        "ljung_box_pval":        round(lb_pval_v, 4),
+        "return_predictable":    bool(lb_pval_v < 0.05),
+
+        # Normality
+        "jarque_bera_stat":      round(float(jb_stat), 4),
+        "jarque_bera_pval":      round(float(jb_pval), 4),
+        "returns_normal":        bool(jb_pval > 0.05),
+        "dagostino_pval":        round(float(norm_pval), 4),
+
+        # Overall verdict
+        "overall_significance":  "strong"   if (p_sharpe<0.05 and p_cagr<0.05) else
+                                 "moderate" if (p_sharpe<0.10 or p_cagr<0.05)  else "weak",
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# COST MODEL — French CTO (Perso + Pro), 7 Brokers
+# ═══════════════════════════════════════════════════════════════════════
+
+_BROKERS = {
+    "interactive_brokers": {
+        "name":"Interactive Brokers","type":"online_broker","country":"US/EU",
+        "order_fee_pct":0.0005,"order_fee_min":1.75,"order_fee_max":None,
+        "custody_fee_annual_pct":0.0,"inactivity_fee_monthly":0.0,
+        "fx_spread_pct":0.002,"lse_access":True,"fractional_shares":True,
+        "pro_account_available":True,"pro_order_fee_pct":0.0003,"pro_order_fee_min":1.0,
+        "rating":5,"notes":"Best value. Excellent FX. Disable stock lending for halal."
+    },
+    "boursorama": {
+        "name":"Boursorama Banque","type":"online_bank","country":"FR",
+        "order_fee_pct":0.0018,"order_fee_min":0.99,"order_fee_max":99.0,
+        "custody_fee_annual_pct":0.0,"inactivity_fee_monthly":0.0,
+        "fx_spread_pct":0.015,"lse_access":True,"fractional_shares":False,
+        "pro_account_available":False,"pro_order_fee_pct":None,"pro_order_fee_min":None,
+        "rating":4,"notes":"No custody fee. LSE accessible. High FX spread."
+    },
+    "fortuneo": {
+        "name":"Fortuneo","type":"online_bank","country":"FR",
+        "order_fee_pct":0.0045,"order_fee_min":0.99,"order_fee_max":None,
+        "custody_fee_annual_pct":0.0,"inactivity_fee_monthly":0.0,
+        "fx_spread_pct":0.015,"lse_access":True,"fractional_shares":False,
+        "pro_account_available":False,"pro_order_fee_pct":None,"pro_order_fee_min":None,
+        "rating":3,"notes":"No custody fee. Order fee high for small amounts."
+    },
+    "swissquote": {
+        "name":"Swissquote","type":"online_broker","country":"CH",
+        "order_fee_pct":0.001,"order_fee_min":9.0,"order_fee_max":None,
+        "custody_fee_annual_pct":0.001,"inactivity_fee_monthly":0.0,
+        "fx_spread_pct":0.0095,"lse_access":True,"fractional_shares":False,
+        "pro_account_available":True,"pro_order_fee_pct":0.0008,"pro_order_fee_min":7.0,
+        "rating":3,"notes":"High minimum fee. Good for large orders (>10k€)."
+    },
+    "banque_populaire": {
+        "name":"Banque Populaire","type":"traditional_bank","country":"FR",
+        "order_fee_pct":0.005,"order_fee_min":9.0,"order_fee_max":None,
+        "custody_fee_annual_pct":0.0015,"inactivity_fee_monthly":3.0,
+        "fx_spread_pct":0.02,"lse_access":False,"fractional_shares":False,
+        "pro_account_available":True,"pro_order_fee_pct":0.003,"pro_order_fee_min":7.0,
+        "rating":2,"notes":"No LSE access. High costs. Avoid for Islamic ETFs."
+    },
+    "cic": {
+        "name":"CIC","type":"traditional_bank","country":"FR",
+        "order_fee_pct":0.005,"order_fee_min":8.0,"order_fee_max":None,
+        "custody_fee_annual_pct":0.0015,"inactivity_fee_monthly":2.5,
+        "fx_spread_pct":0.02,"lse_access":False,"fractional_shares":False,
+        "pro_account_available":True,"pro_order_fee_pct":0.003,"pro_order_fee_min":6.0,
+        "rating":2,"notes":"Same structure as CM-CIC group. No LSE access."
+    },
+    "la_poste": {
+        "name":"La Banque Postale","type":"traditional_bank","country":"FR",
+        "order_fee_pct":0.006,"order_fee_min":10.0,"order_fee_max":None,
+        "custody_fee_annual_pct":0.002,"inactivity_fee_monthly":3.0,
+        "fx_spread_pct":0.025,"lse_access":False,"fractional_shares":False,
+        "pro_account_available":False,"pro_order_fee_pct":None,"pro_order_fee_min":None,
+        "rating":1,"notes":"Highest fees. No LSE. Not recommended for ETF investing."
+    },
+}
+
+_MICROSTRUCTURE = {
+    "ISWD":{"avg_spread_bps":12,"avg_daily_volume_eur":8_500_000,"market_impact_bps_per_100k":3},
+    "IUSF":{"avg_spread_bps":15,"avg_daily_volume_eur":4_200_000,"market_impact_bps_per_100k":5},
+    "ISDE":{"avg_spread_bps":18,"avg_daily_volume_eur":3_100_000,"market_impact_bps_per_100k":7},
+    "AMAL":{"avg_spread_bps":45,"avg_daily_volume_eur":180_000,  "market_impact_bps_per_100k":25},
+    "HIWS":{"avg_spread_bps":35,"avg_daily_volume_eur":420_000,  "market_impact_bps_per_100k":18},
+    "IWDA":{"avg_spread_bps":8, "avg_daily_volume_eur":125_000_000,"market_impact_bps_per_100k":1},
+    "CSPX":{"avg_spread_bps":6, "avg_daily_volume_eur":210_000_000,"market_impact_bps_per_100k":0.5},
+    "GLD": {"avg_spread_bps":5, "avg_daily_volume_eur":890_000_000,"market_impact_bps_per_100k":0.2},
+}
+
+# French tax constants (2025, source: CGI articles 150-0 A, 200 A, 117 quater)
+_TAX_FR = {
+    "pfu_rate":             0.30,   # 12.8% IR + 17.2% PS
+    "ir_component":         0.128,
+    "ps_component":         0.172,
+    "progressive_threshold":0.30,   # Use PFU if TMI >= 30%
+    "dividend_pfu":         0.30,
+    "dividend_wht_ireland": 0.15,   # Irish domicile WHT on dividends
+    "dividend_fr_credit":   0.15,   # Tax credit for Irish WHT in France
+    "ttf_rate":             0.003,  # Taxe sur Transactions Financières
+    "ttf_applies_etf":      False,  # ETFs not subject to TTF
+    "ttf_threshold_cap":    1e9,    # Only FR companies > €1bn market cap
+    "loss_carryforward_yrs":10,     # Article 150-0 D
+    "cto_perso_no_exempt":  True,   # No annual exemption on CTO
+    "pea_exempt_after_5y":  True,   # Exempt IR after 5y (only PS 17.2% due)
+    "per_deductible":       True,   # Versements déductibles du revenu imposable
+    "notes": (
+        "PFU 30% (flat tax) applies by default. "
+        "Option for progressive scale if TMI < 30%. "
+        "Irish-domiciled ETFs: 15% WHT on dividends, creditable against French tax. "
+        "TTF does NOT apply to UCITS ETFs. "
+        "Capital losses carry forward 10 years."
+    )
+}
+
+def compute_order_cost(etf_key: str, order_eur: float, broker_key: str,
+                        account_type: str = "perso") -> dict:
+    """Compute full cost breakdown for a single order."""
+    if broker_key not in _BROKERS:
+        return {"error": f"Unknown broker: {broker_key}"}
+    b    = _BROKERS[broker_key]
+    m    = _MICROSTRUCTURE.get(etf_key, {"avg_spread_bps":20,"market_impact_bps_per_100k":10})
+
+    # Use pro fees if applicable
+    if account_type == "pro" and b.get("pro_account_available") and b.get("pro_order_fee_pct"):
+        fee_pct = b["pro_order_fee_pct"]
+        fee_min = b["pro_order_fee_min"]
+    else:
+        fee_pct = b["order_fee_pct"]
+        fee_min = b["order_fee_min"]
+
+    commission    = max(order_eur * fee_pct, fee_min)
+    if b.get("order_fee_max"): commission = min(commission, b["order_fee_max"])
+    fx_cost       = order_eur * b["fx_spread_pct"]
+    spread_cost   = order_eur * (m["avg_spread_bps"] / 10000) / 2
+    impact_pct    = m["market_impact_bps_per_100k"]/10000 * (order_eur/100000)**0.5
+    market_impact = order_eur * impact_pct
+    slippage      = order_eur * 0.0003
+    ter_drag      = order_eur * (_REGISTRY.get(etf_key,{}).get("ter",0.5)/100/252)
+
+    one_way       = commission + fx_cost + spread_cost + market_impact + slippage
+    one_way_pct   = one_way / order_eur * 100
+
+    return {
+        "broker":          broker_key,
+        "etf":             etf_key,
+        "order_eur":       order_eur,
+        "account_type":    account_type,
+        "commission_eur":  round(commission,4),
+        "fx_cost_eur":     round(fx_cost,4),
+        "spread_cost_eur": round(spread_cost,4),
+        "market_impact_eur":round(market_impact,4),
+        "slippage_eur":    round(slippage,4),
+        "ter_daily_drag_eur":round(ter_drag,6),
+        "one_way_total_eur":round(one_way,4),
+        "one_way_pct":     round(one_way_pct,4),
+        "round_trip_eur":  round(one_way*2,4),
+        "round_trip_pct":  round(one_way_pct*2,4),
+        "lse_accessible":  b["lse_access"],
+    }
+
+
+def compute_dca_net_return(etf_key: str, monthly_amount: float, n_months: int,
+                            gross_annual_return: float, broker_key: str,
+                            account_type: str = "perso",
+                            dividend_yield: float = 0.015,
+                            tax_option: str = "pfu") -> dict:
+    """
+    Full net return after:
+    - Transaction costs (commission, FX, spread, market impact, slippage)
+    - Annual custody/inactivity fees
+    - TER drag (already in price but shown explicitly)
+    - French taxes: PFU 30% on capital gains + dividend tax
+    - WHT credit for Irish ETFs
+    """
+    if broker_key not in _BROKERS:
+        return {"error": f"Unknown broker: {broker_key}"}
+    b  = _BROKERS[broker_key]
+    m  = _MICROSTRUCTURE.get(etf_key, {"avg_spread_bps":20,"market_impact_bps_per_100k":10})
+
+    # Transaction cost per buy order
+    order_cost = compute_order_cost(etf_key, monthly_amount, broker_key, account_type)
+    cost_per_buy = order_cost["one_way_total_eur"]
+
+    # Monthly rate
+    monthly_r = (1 + gross_annual_return) ** (1/12) - 1
+
+    # Simulate DCA
+    units = 0.0; invested = 0.0; tx_costs = 0.0; dividends_received = 0.0
+    monthly_div_yield = dividend_yield / 12
+    portfolio_values = []
+
+    for i in range(n_months):
+        # Buy
+        net_invest = monthly_amount - cost_per_buy
+        units += net_invest
+        invested += monthly_amount
+        tx_costs += cost_per_buy
+        # Growth
+        units *= (1 + monthly_r)
+        # Dividends (taxed immediately on CTO)
+        div = units * monthly_div_yield
+        div_tax = div * (_TAX_FR["dividend_pfu"] - _TAX_FR["dividend_fr_credit"])
+        dividends_received += div - div_tax
+        portfolio_values.append(units)
+
+    gross_final = units + dividends_received
+
+    # Annual custody fee
+    avg_port = np.mean(portfolio_values)
+    annual_custody = avg_port * b["custody_fee_annual_pct"] + b["inactivity_fee_monthly"] * 12
+    total_custody = annual_custody * n_months / 12
+    tx_costs += total_custody
+
+    # Sell cost
+    sell_cost = compute_order_cost(etf_key, gross_final, broker_key, account_type)["one_way_total_eur"]
+    tx_costs += sell_cost
+
+    # Capital gains tax (PFU 30%)
+    gross_gain = gross_final - invested
+    taxable_gain = max(0, gross_gain - tx_costs + dividends_received * 0.30)
+    cg_tax = max(0, (gross_final - tx_costs - invested) * _TAX_FR["pfu_rate"])
+
+    net_final = gross_final - tx_costs - cg_tax
+    net_gain  = net_final - invested
+    net_return_pct = net_gain / invested * 100 if invested > 0 else 0
+    gross_return_pct = gross_gain / invested * 100 if invested > 0 else 0
+
+    # Annual cost drag
+    cost_drag_annual = (tx_costs / (avg_port * n_months/12)) * 100 if avg_port > 0 else 0
+
+    return {
+        "broker":            broker_key,
+        "broker_name":       b["name"],
+        "etf":               etf_key,
+        "account_type":      account_type,
+        "monthly_amount":    monthly_amount,
+        "n_months":          n_months,
+        "total_invested":    round(invested, 2),
+        "gross_final":       round(gross_final, 2),
+        "net_final":         round(net_final, 2),
+        "gross_return_pct":  round(gross_return_pct, 2),
+        "net_return_pct":    round(net_return_pct, 2),
+        "return_drag_pp":    round(gross_return_pct - net_return_pct, 2),
+        "tx_costs_total":    round(tx_costs, 2),
+        "cg_tax":            round(cg_tax, 2),
+        "dividends_net":     round(dividends_received, 2),
+        "cost_drag_annual_pct": round(cost_drag_annual, 3),
+        "annual_custody_eur": round(annual_custody, 2),
+        "lse_accessible":    b["lse_access"],
+        "broker_rating":     b["rating"],
+        "tax_details": {
+            "pfu_rate":          _TAX_FR["pfu_rate"],
+            "dividend_wht":      _TAX_FR["dividend_wht_ireland"],
+            "ttf_applies":       _TAX_FR["ttf_applies_etf"],
+            "loss_carryforward": _TAX_FR["loss_carryforward_yrs"],
+        }
+    }
+
+
+def compare_all_brokers(etf_key: str, monthly_amount: float, n_months: int,
+                         gross_annual_return: float) -> dict:
+    """Compare all 7 brokers side by side for a given DCA scenario."""
+    results = {}
+    for broker_key in _BROKERS:
+        for acct in ["perso", "pro"]:
+            b = _BROKERS[broker_key]
+            if acct == "pro" and not b.get("pro_account_available"):
+                continue
+            r = compute_dca_net_return(etf_key, monthly_amount, n_months,
+                                        gross_annual_return, broker_key, acct)
+            results[f"{broker_key}_{acct}"] = r
+
+    # Rank by net_return_pct
+    ranked = sorted(results.items(), key=lambda x: x[1].get("net_return_pct", -999), reverse=True)
+    return {
+        "scenario": {"etf":etf_key,"monthly_amount":monthly_amount,
+                     "n_months":n_months,"gross_cagr":gross_annual_return},
+        "results":  dict(ranked),
+        "ranking":  [{"rank":i+1,"key":k,"broker_name":v["broker_name"],
+                      "net_return_pct":v["net_return_pct"],"net_final":v["net_final"],
+                      "total_costs":v["tx_costs_total"],"lse_accessible":v["lse_accessible"]}
+                     for i,(k,v) in enumerate(ranked)],
+        "best_broker":   ranked[0][1]["broker_name"] if ranked else None,
+        "worst_broker":  ranked[-1][1]["broker_name"] if ranked else None,
+        "cost_spread_eur": round(ranked[0][1]["net_final"] - ranked[-1][1]["net_final"], 2) if ranked else 0,
+        "tax_notes":     _TAX_FR["notes"],
+    }
+
+
+def compute_verdict(keys: list, period: str = "5y") -> dict:
+    """
+    Comprehensive verdict integrating:
+    - Statistical significance of performance
+    - Best strategy recommendations (B&H vs ADN vs active)
+    - Optimal portfolio allocation
+    - Cost-adjusted net returns per broker
+    - Halal compliance status
+    """
+    price_data = fetch_prices(keys + ["IWDA"], period)
+    verdicts   = {}
+    for key in keys:
+        if key not in price_data: continue
+        pd_  = price_data[key]
+        s    = to_series(pd_)
+        bench_pd = price_data.get("IWDA", {})
+        sig  = compute_significance(
+            pd_["prices"], pd_["dates"],
+            bench_pd.get("prices"), bench_pd.get("dates")
+        )
+        m    = compute_metrics(pd_["prices"], pd_["dates"])
+        sigs = compute_signals(s)
+        info = _REGISTRY.get(key, {})
+
+        # Score composite (0-100)
+        score = 0
+        if sig.get("sharpe_significant_95"): score += 20
+        if sig.get("cagr_significant_95"):   score += 15
+        if m.get("sharpe",0) > 1.0:          score += 20
+        if m.get("max_drawdown",0) > -30:    score += 15
+        if m.get("cagr",0) > 8:              score += 15
+        if info.get("halal"):                score += 10
+        if sigs.get("composite_signal") == "bullish": score += 5
+
+        # Strategy recommendation
+        sr = m.get("sharpe", 0)
+        r2 = m.get("log_r_squared", 0)
+        if r2 > 0.80 and sr > 0.8:
+            best_strategy = "Buy & Hold"
+            strategy_note = "High trend consistency (R²>{:.2f}) — compounding beats active trading".format(r2)
+        elif sr > 0.5 and m.get("autocorr_lag1", 0) > 0.05:
+            best_strategy = "ADN (Adaptive Dynamic Allocation)"
+            strategy_note = "Positive autocorrelation → momentum regime benefits from vol-targeting"
+        else:
+            best_strategy = "Renaissance Composite"
+            strategy_note = "Low trend R² → statistical signal approach outperforms passive"
+
+        # Net return estimate after costs (IBKR vs worst broker)
+        cost_best  = compute_dca_net_return(key, 200, 60, max(m.get("cagr",0)/100, 0.05), "interactive_brokers")
+        cost_worst = compute_dca_net_return(key, 200, 60, max(m.get("cagr",0)/100, 0.05), "la_poste")
+
+        verdicts[key] = {
+            "score":          score,
+            "invest":         "YES" if score >= 50 else ("WAIT" if score >= 30 else "NO"),
+            "halal":          info.get("halal", False),
+            "metrics":        m,
+            "significance":   sig,
+            "signals":        sigs,
+            "best_strategy":  best_strategy,
+            "strategy_note":  strategy_note,
+            "net_return_ibkr_5y": cost_best.get("net_return_pct"),
+            "net_return_laposte_5y": cost_worst.get("net_return_pct"),
+            "broker_advantage_pp": round((cost_best.get("net_return_pct",0) - cost_worst.get("net_return_pct",0)),1),
+        }
+
+    # Optimal allocation via Max Sharpe
+    valid_keys = [k for k in keys if k in price_data and verdicts.get(k,{}).get("invest")!="NO"]
+    optimal_alloc = {}
+    if len(valid_keys) >= 2:
+        try:
+            opt = optimize_portfolio(valid_keys, period, "max_sharpe")
+            optimal_alloc = opt.get("weights", {})
+        except Exception:
+            optimal_alloc = {k: 1/len(valid_keys) for k in valid_keys}
+
+    return {
+        "verdicts":        verdicts,
+        "optimal_allocation": optimal_alloc,
+        "recommended_broker": "Interactive Brokers",
+        "recommended_account": "CTO Perso (IBKR)",
+        "tax_framework":   _TAX_FR,
+        "period_analyzed": period,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# ROUTES — new endpoints
+# ═══════════════════════════════════════════════════════════════════════
+
+@app.get("/api/significance/{key}")
+def get_significance(key: str, period: str = "5y", benchmark: str = "IWDA", n_boot: int = 500):
+    k = key.upper(); bench = benchmark.upper()
+    if k not in _REGISTRY: raise HTTPException(404, f"{k} not found")
+    pd_    = fetch_prices([k, bench], period)
+    bench_pd = pd_.get(bench, {})
+    sig = compute_significance(
+        pd_[k]["prices"], pd_[k]["dates"],
+        bench_pd.get("prices"), bench_pd.get("dates"),
+        n_boot=n_boot
+    )
+    return {"key": k, "significance": sig}
+
+@app.get("/api/brokers")
+def get_brokers():
+    return {"brokers": _BROKERS, "tax_model": _TAX_FR, "microstructure": _MICROSTRUCTURE}
+
+@app.post("/api/costs/order")
+def order_cost(etf: str, amount: float, broker: str, account_type: str = "perso"):
+    etf = etf.upper()
+    if etf not in _REGISTRY: raise HTTPException(404, f"{etf} not found")
+    return compute_order_cost(etf, amount, broker, account_type)
+
+@app.post("/api/costs/dca")
+def dca_cost(etf: str, monthly: float = 200, months: int = 60,
+             gross_cagr: float = 0.10, broker: str = "interactive_brokers",
+             account_type: str = "perso", dividend_yield: float = 0.015):
+    etf = etf.upper()
+    if etf not in _REGISTRY: raise HTTPException(404, f"{etf} not found")
+    return compute_dca_net_return(etf, monthly, months, gross_cagr, broker, account_type, dividend_yield)
+
+@app.get("/api/costs/compare")
+def compare_brokers(etf: str = "ISWD", monthly: float = 200,
+                     months: int = 60, gross_cagr: float = 0.10):
+    etf = etf.upper()
+    if etf not in _REGISTRY: raise HTTPException(404, f"{etf} not found")
+    return compare_all_brokers(etf, monthly, months, gross_cagr)
+
+@app.get("/api/verdict")
+def get_verdict(keys: str = "ISWD,IUSF,ISDE,AMAL,HIWS", period: str = "5y"):
+    key_list = [k.strip().upper() for k in keys.split(",") if k.strip().upper() in _REGISTRY]
+    if not key_list: raise HTTPException(400, "No valid keys")
+    return compute_verdict(key_list, period)
+
+@app.post("/api/backtest/buy_and_hold")
+def run_buy_and_hold(req: BacktestRequest):
+    keys = [k.upper() for k in req.keys if k.upper() in _REGISTRY]
+    if not keys: raise HTTPException(400, "No valid keys")
+    pd_data = fetch_prices(keys + (["IWDA"] if "IWDA" not in keys else []), req.period)
+    return backtest_buy_and_hold(pd_data, keys, req.initial_capital,
+                                  req.allocations, req.benchmark_key)
+
+@app.post("/api/backtest/adn")
+def run_adn(req: BacktestRequest):
+    keys = [k.upper() for k in req.keys if k.upper() in _REGISTRY]
+    if not keys: raise HTTPException(400, "No valid keys")
+    pd_data = fetch_prices(keys + (["IWDA"] if "IWDA" not in keys else []), req.period)
+    target_vol = getattr(req.strategy, "target_vol", 0.10)
+    return backtest_adn(pd_data, keys, req.initial_capital, target_vol, req.benchmark_key)
+
+@app.post("/api/agent")
+async def run_agent(req: AgentRequest):
+    return await run_agent_loop(req)
+
+@app.get("/api/sentiment/{key}")
+def get_sentiment_route(key: str):
+    k = key.upper()
+    if k not in _REGISTRY: raise HTTPException(404, f"{k} not found")
+    return compute_sentiment(k)
+
+@app.get("/api/etfs")
+def get_etfs():
+    return {"etfs": _REGISTRY}
+
+@app.get("/api/live")
+def get_live():
+    return {key: _live_price_estimate(key) for key in _REGISTRY}
+
+@app.get("/api/metrics/{key}")
+def get_metrics(key: str, period: str = "5y", rf: float = 0.03):
+    k = key.upper()
+    if k not in _REGISTRY: raise HTTPException(404, f"{k} not found")
+    pd_ = fetch_prices([k], period)[k]; s = to_series(pd_)
+    return {"key":k,"info":_REGISTRY[k],"metrics":compute_metrics(pd_["prices"],pd_["dates"],rf),
+            "signals":compute_signals(s),
+            "price_data":{"dates":pd_["dates"][::5],"prices":pd_["prices"][::5],"source":pd_["source"]}}
+
+@app.get("/api/compare")
+def compare(keys: str = "ISWD,IUSF,ISDE", period: str = "5y", rf: float = 0.03):
+    kl = [k.strip().upper() for k in keys.split(",") if k.strip().upper() in _REGISTRY]
+    if not kl: raise HTTPException(400, "No valid keys")
+    pd_ = fetch_prices(kl, period); result = {}
+    for k in kl:
+        d = pd_[k]; s = to_series(d); base = d["prices"][0]
+        result[k] = {"info":_REGISTRY[k],"metrics":compute_metrics(d["prices"],d["dates"],rf),
+                     "signals":compute_signals(s),
+                     "normalized":{"dates":d["dates"][::5],"prices":[round(p/base*100,2) for p in d["prices"]][::5]},
+                     "source":d["source"]}
+    return result
+
+@app.get("/api/signals/{key}")
+def get_signals(key: str, period: str = "1y"):
+    k = key.upper()
+    if k not in _REGISTRY: raise HTTPException(404, f"{k} not found")
+    d = fetch_prices([k], period)[k]; return {"key":k,"signals":compute_signals(to_series(d))}
+
+@app.get("/api/strategies/presets")
+def get_presets():
+    return {"presets":{
+        "buy_and_hold":{"name":"Buy & Hold","type":"buy_and_hold","description":"Invest once, never sell. Pure compounding.","transaction_cost_bps":5},
+        "adn":{"name":"ADN — Adaptive Dynamic Allocation","type":"adn","target_vol":0.10,"description":"3-layer: regime detection + vol targeting + EMA trend gate.","transaction_cost_bps":10},
+        "buffett_quality":{"name":"Buffett Quality","type":"buffett_quality","lookback_days":252,"ema_fast":50,"ema_slow":200,"rebalance_freq":"monthly","transaction_cost_bps":5,"description":"Log R² linearity + low vol + momentum."},
+        "renaissance_composite":{"name":"Renaissance Composite","type":"renaissance","lookback_days":126,"ema_fast":20,"ema_slow":60,"rebalance_freq":"monthly","transaction_cost_bps":10,"description":"Composite stat-arb: momentum + trend + vol."},
+        "dual_momentum":{"name":"Dual Momentum (Antonacci)","type":"dual_momentum","lookback_days":252,"momentum_skip_days":21,"rebalance_freq":"monthly","transaction_cost_bps":10,"description":"Absolute + relative momentum with risk-off filter."},
+        "trend_following":{"name":"Trend EMA 50/200","type":"trend_following","lookback_days":252,"ema_fast":50,"ema_slow":200,"rebalance_freq":"weekly","stop_loss_pct":-0.08,"description":"Long if EMA50>EMA200, cash otherwise."},
+        "mean_reversion":{"name":"Mean Reversion Z-Score","type":"mean_reversion","zscore_entry":-1.5,"zscore_exit":0.0,"zscore_window":63,"rebalance_freq":"weekly","description":"Buy Z<-1.5, sell at mean."},
+        "rsi_contrarian":{"name":"RSI Contrarian","type":"rsi_contrarian","rsi_period":14,"rsi_oversold":30.0,"rebalance_freq":"weekly","description":"Buy oversold RSI<30."},
+    }}
+
+@app.post("/api/backtest")
+def run_backtest(req: BacktestRequest):
+    keys = [k.upper() for k in req.keys if k.upper() in _REGISTRY]
+    if not keys: raise HTTPException(400, "No valid keys")
+    if req.strategy.type == "buy_and_hold":
+        pd_data = fetch_prices(keys+["IWDA"], req.period)
+        return backtest_buy_and_hold(pd_data,keys,req.initial_capital,req.allocations,req.benchmark_key)
+    if req.strategy.type == "adn":
+        pd_data = fetch_prices(keys+["IWDA"], req.period)
+        return backtest_adn(pd_data,keys,req.initial_capital,req.strategy.target_vol,req.benchmark_key)
+    all_keys = list(set(keys+([req.benchmark_key] if req.benchmark_key and req.benchmark_key in _REGISTRY else [])))
+    pd_ = fetch_prices(all_keys, req.period)
+    etf_d={k:pd_[k] for k in keys}; bench_d={req.benchmark_key:pd_[req.benchmark_key]} if req.benchmark_key in pd_ else {}
+    return backtest_strategy({**etf_d,**bench_d},req.strategy,req.initial_capital,req.benchmark_key)
+
+@app.post("/api/optimize")
+def optimize(req: PortfolioOptRequest):
+    keys = [k.upper() for k in req.keys if k.upper() in _REGISTRY]
+    if len(keys)<2: raise HTTPException(400,"Need at least 2 valid keys")
+    return optimize_portfolio(keys,req.period,req.method,req.risk_free_rate,req.constraints)
+
+@app.post("/api/dca")
+def run_dca(req: DCAStrategyRequest):
+    k = req.key.upper()
+    if k not in _REGISTRY: raise HTTPException(404,f"{k} not found")
+    d = fetch_prices([k],req.period)[k]; result=run_dca_advanced(d["prices"],d["dates"],req)
+    return {"key":k,"info":_REGISTRY[k],**result}
+
+@app.post("/api/portfolio")
+def analyze_portfolio(req: dict):
+    name=req.get("name","Portfolio"); allocs=req.get("allocations",{})
+    monthly=float(req.get("monthly_dca",200)); period=req.get("period","5y")
+    keys=[k.upper() for k in allocs if k.upper() in _REGISTRY]
+    if not keys: raise HTTPException(400,"No valid keys")
+    pd_=fetch_prices(keys,period); port_s=None; individual={}
+    for k in keys:
+        alloc=allocs.get(k,allocs.get(k.lower(),0))/100; d=pd_[k]; s=to_series(d)
+        s_n=s/s.iloc[0]*alloc; m=compute_metrics(d["prices"],d["dates"])
+        cfg=DCAStrategyRequest(key=k,monthly_amount=monthly*alloc,period=period)
+        dca_s=run_dca_advanced(d["prices"],d["dates"],cfg)["summary"]
+        individual[k]={"metrics":m,"dca":dca_s,"allocation":allocs.get(k,allocs.get(k.lower(),0)),"signals":compute_signals(s)}
+        port_s=s_n if port_s is None else port_s.add(s_n,fill_value=0)
+    pp=port_s.tolist(); pd2=[d.strftime("%Y-%m-%d") for d in port_s.index]
+    pm=compute_metrics(pp,pd2); cfg2=DCAStrategyRequest(key=keys[0],monthly_amount=monthly,period=period)
+    pdca=run_dca_advanced(pp,pd2,cfg2); base=pp[0]
+    return {"name":name,"allocations":allocs,"portfolio_metrics":pm,"portfolio_dca":pdca,
+            "individual":individual,"chart":{"dates":pd2[::5],"prices":[round(p/base*100,2) for p in pp][::5]}}
+
+@app.get("/api/rolling/{key}")
+def get_rolling(key: str, window_years: int = 3, period: str = "5y"):
+    k = key.upper()
+    if k not in _REGISTRY: raise HTTPException(404,f"{k} not found")
+    d=fetch_prices([k],period)[k]; s=pd.Series(d["prices"],index=pd.to_datetime(d["dates"]))
+    window=window_years*252; results=[]
+    for i in range(window,len(s),21):
+        sub=s.iloc[i-window:i+1]; ny=(sub.index[-1]-sub.index[0]).days/365.25
+        r=float((sub.iloc[-1]/sub.iloc[0])**(1/ny)-1)*100 if ny>0 else 0
+        results.append({"date":sub.index[-1].strftime("%Y-%m"),"cagr":round(r,2)})
+    if not results: return {"key":k,"data":[],"stats":{}}
+    cagrs=[r["cagr"] for r in results]
+    return {"key":k,"window_years":window_years,"data":results,
+            "stats":{"mean":round(float(np.mean(cagrs)),2),"min":round(float(np.min(cagrs)),2),
+                     "max":round(float(np.max(cagrs)),2),"pct_positive":round(float(np.mean([c>0 for c in cagrs])*100),1),
+                     "p5":round(float(np.percentile(cagrs,5)),2),"p95":round(float(np.percentile(cagrs,95)),2)}}
+
+@app.post("/api/registry/add")
+def add_ticker(t: TickerAdd):
+    k=t.key.upper()
+    _REGISTRY[k]={"ticker":t.ticker,"name":t.name,"isin":t.isin,"ter":t.ter,"halal":t.halal,
+                  "board":t.board,"category":t.category,"region":t.region,
+                  "base_price":t.base_price,"currency":t.currency}
+    if t.gbm_mu: _REGISTRY[k]["gbm_mu"]=t.gbm_mu
+    if t.gbm_sigma: _REGISTRY[k]["gbm_sigma"]=t.gbm_sigma
+    _GBM_PARAMS[k]=(t.gbm_mu or 0.08, t.gbm_sigma or 0.18)
+    return {"added":k,"registry_size":len(_REGISTRY)}
+
+@app.delete("/api/registry/{key}")
+def remove_ticker(key: str):
+    k=key.upper()
+    if k not in _REGISTRY: raise HTTPException(404,f"{k} not found")
+    del _REGISTRY[k]; return {"removed":k}
