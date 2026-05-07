@@ -7,6 +7,10 @@ import {
 import { useCompare, useDCA, usePortfolioAnalysis, useLivePrices } from './hooks/useApi'
 import { exportToPDF } from './utils/pdfExport'
 import { TickerManager, SignalsPanel, StrategyPanel, OptimizerPanel } from './components/QuantPanels'
+import { CostPanel }        from './components/CostPanel'
+import { SignificancePanel } from './components/SignificancePanel'
+import { VerdictPanel }      from './components/VerdictPanel'
+import { AgentPanel }        from './components/AgentPanel'
 import type { Portfolio, Period, TabId } from './types'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -21,16 +25,19 @@ const DEFAULT_ETFS = ['ISWD','IUSF','ISDE','AMAL','HIWS']
 const BENCH        = ['IWDA','CSPX','GLD']
 
 const TABS = [
-  { id:'overview',   label:'📊 Live Prix'    },
-  { id:'compare',    label:'📈 Comparer'     },
-  { id:'dca',        label:'💰 DCA'          },
-  { id:'portfolio',  label:'🗂 Portefeuilles'},
-  { id:'signals',    label:'🎯 Signaux IA'   },
-  { id:'strategy',   label:'🔬 Stratégies'   },
-  { id:'optimize',   label:'📐 Optimisation' },
-  { id:'tickers',    label:'⚙️ Tickers'      },
-  { id:'halal',      label:'☪️ Halal'        },
-  { id:'verdict',    label:'🏆 Verdict'      },
+  { id:'overview',     label:'📊 Live Prices'   },
+  { id:'compare',      label:'📈 Compare'        },
+  { id:'dca',          label:'💰 DCA'            },
+  { id:'portfolio',    label:'🗂 Portfolios'     },
+  { id:'signals',      label:'🎯 AI Signals'     },
+  { id:'strategy',     label:'🔬 Strategies'     },
+  { id:'optimize',     label:'📐 Optimize'       },
+  { id:'significance', label:'📏 Significance'   },
+  { id:'costs',        label:'💶 Costs & Tax'    },
+  { id:'verdict',      label:'🏆 Verdict'        },
+  { id:'agent',        label:'🤖 AI Agent'       },
+  { id:'tickers',      label:'⚙️ Tickers'        },
+  { id:'halal',        label:'☪️ Halal'          },
 ]
 
 // ─── Shared UI ────────────────────────────────────────────────────────────────
@@ -179,7 +186,7 @@ export default function App() {
             <div style={{ background:'linear-gradient(135deg,#3B82F6,#8B5CF6)', borderRadius:10, padding:'6px 10px', fontSize:20 }}>☪️</div>
             <div>
               <h1 style={{ fontSize:'1.25rem', fontWeight:800, color:'#F1F5F9', margin:0 }}>Halal ETF Analytics</h1>
-              <p style={{ color:'#475569', fontSize:'0.72rem', margin:0 }}>Python · FastAPI · yfinance · 20+ métriques · Strategies Renaissance+Buffett · Multi-portefeuille</p>
+              <p style={{ color:'#475569', fontSize:'0.72rem', margin:0 }}>Python · FastAPI · yfinance · 20+ metrics · Buy&Hold · ADN · Renaissance · Stat Significance · Cost Model · AI Agent</p>
             </div>
           </div>
           <div style={{ display:'flex', gap:8, alignItems:'center' }}>
@@ -424,10 +431,14 @@ export default function App() {
         )}
 
         {/* ══ NEW TABS — delegate to QuantPanels ══ */}
-        {tab==='signals'  && <SignalsPanel  registry={registry}/>}
-        {tab==='strategy' && <StrategyPanel registry={registry}/>}
-        {tab==='optimize' && <OptimizerPanel registry={registry}/>}
-        {tab==='tickers'  && <TickerManager registry={registry} onRefresh={refreshRegistry}/>}
+        {tab==='signals'      && <SignalsPanel      registry={registry}/>}
+        {tab==='strategy'     && <StrategyPanel     registry={registry}/>}
+        {tab==='optimize'     && <OptimizerPanel    registry={registry}/>}
+        {tab==='significance' && <SignificancePanel  registry={registry}/>}
+        {tab==='costs'        && <CostPanel          registry={registry}/>}
+        {tab==='verdict'      && <VerdictPanel       registry={registry}/>}
+        {tab==='agent'        && <AgentPanel         registry={registry}/>}
+        {tab==='tickers'      && <TickerManager      registry={registry} onRefresh={refreshRegistry}/>}
 
         {/* ══ HALAL ══ */}
         {tab==='halal' && (
