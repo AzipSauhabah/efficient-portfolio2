@@ -1,50 +1,24 @@
-export interface ETFInfo {
-  ticker: string
-  name: string
-  isin: string
-  ter: number
-  halal: boolean
-  board: string | null
+export interface LivePrice {
+  price: number | null
+  change_pct: number | null
+  source: string
+  currency?: string
 }
-
-export interface Metrics {
-  cagr: number
-  volatility: number
-  max_drawdown: number
-  sharpe: number
-  sortino: number
-  calmar: number
-  var_95: number
-  cvar_95: number
-  total_return: number
-  last_price: number | null
-  rolling_1y: { date: string; return: number }[]
-}
-
-export interface DCASummary {
-  total_invested: number
-  final_value: number
-  total_gain: number
-  total_return_pct: number
-  n_months: number
-  multiplier: number
-}
-
-export interface DCARecord {
-  date: string
-  invested: number
-  value: number
-  gain: number
-  pct: number
-}
-
 export interface ETFCompareResult {
-  info: ETFInfo
-  metrics: Metrics
+  info: Record<string, any>
+  metrics: Record<string, any>
+  signals: Record<string, any>
   normalized: { dates: string[]; prices: number[] }
   source: string
 }
-
+export interface PortfolioResult {
+  name: string
+  allocations: Record<string, number>
+  portfolio_metrics: Record<string, any>
+  portfolio_dca: any
+  individual: Record<string, any>
+  chart: { dates: string[]; prices: number[] }
+}
 export interface Portfolio {
   id: string
   name: string
@@ -53,21 +27,5 @@ export interface Portfolio {
   period: string
   color: string
 }
-
-export interface PortfolioResult {
-  name: string
-  allocations: Record<string, number>
-  portfolio_metrics: Metrics
-  portfolio_dca: { records: DCARecord[]; summary: DCASummary }
-  individual: Record<string, { metrics: Metrics; dca: DCASummary; allocation: number }>
-  chart: { dates: string[]; prices: number[] }
-}
-
-export interface LivePrice {
-  price: number | null
-  change_pct: number | null
-  source: string
-}
-
 export type Period = '1y' | '2y' | '3y' | '5y'
-export type TabId = 'overview' | 'compare' | 'dca' | 'portfolio' | 'risk' | 'halal' | 'verdict'
+export type TabId = 'discover' | 'analyze' | 'simulate' | 'build' | 'verdict' | 'settings'
